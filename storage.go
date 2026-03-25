@@ -18,7 +18,8 @@ import (
 )
 
 var (
-	ErrNoDataPoints = errors.New("no data points found")
+	ErrNoDataPoints    = errors.New("no data points found")
+	ErrMixedSeriesKind = errors.New("cannot mix numeric and blob data points for the same metric")
 
 	// Limit the concurrency for data ingestion to GOMAXPROCS, since this operation
 	// is CPU bound, so there is no sense in running more than GOMAXPROCS concurrent
@@ -80,11 +81,24 @@ type Row struct {
 }
 
 // DataPoint represents a data point, the smallest unit of time series data.
+//
+// A data point is either numeric (Payload == nil) or blob (Payload != nil).
+// For numeric series, Value carries the measurement. For blob series, Payload
+// carries arbitrary bytes and Value is ignored.
+// All data points for a given metric+labels combination must be the same kind.
 type DataPoint struct {
-	// The actual value. This field must be set.
+	// The actual value. Used for numeric series (when Payload is nil).
 	Value float64
 	// Unix timestamp.
 	Timestamp int64
+	// Arbitrary binary payload. When non-nil the data point is treated as a
+	// blob series entry and Value is ignored.
+	Payload []byte
+}
+
+// IsBlob reports whether this data point carries a binary payload.
+func (d *DataPoint) IsBlob() bool {
+	return d.Payload != nil
 }
 
 // Option is an optional setting for NewStorage.
@@ -512,7 +526,6 @@ func (s *storage) flush(dirPath string, m *memoryPartition) error {
 		return fmt.Errorf("failed to create file %q: %w", dirPath, err)
 	}
 	defer f.Close()
-	encoder := newSeriesEncoder(f)
 
 	metrics := map[string]diskMetric{}
 	m.metrics.Range(func(key, value interface{}) bool {
@@ -525,6 +538,15 @@ func (s *storage) flush(dirPath string, m *memoryPartition) error {
 		if err != nil {
 			s.logger.Printf("failed to set file offset of metric %q: %v\n", mt.name, err)
 			return false
+		}
+
+		var encoder seriesEncoder
+		codec := ""
+		if mt.kind == seriesKindBlob {
+			encoder = newBlobSeriesEncoder(f)
+			codec = "blob"
+		} else {
+			encoder = newSeriesEncoder(f)
 		}
 
 		if err := mt.encodeAllPoints(encoder); err != nil {
@@ -544,6 +566,7 @@ func (s *storage) flush(dirPath string, m *memoryPartition) error {
 			MinTimestamp:  mt.minTimestamp,
 			MaxTimestamp:  mt.maxTimestamp,
 			NumDataPoints: totalNumPoints,
+			Codec:         codec,
 		}
 		return true
 	})

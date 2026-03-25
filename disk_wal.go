@@ -81,8 +81,14 @@ func (w *diskWAL) append(op walOperation, rows []Row) error {
 	switch op {
 	case operationInsert:
 		for _, row := range rows {
+			if row.DataPoint.IsBlob() {
+				if err := w.appendBlobRow(row); err != nil {
+					return err
+				}
+				continue
+			}
 			// Write the operation type
-			if err := w.w.WriteByte(byte(op)); err != nil {
+			if err := w.w.WriteByte(byte(operationInsert)); err != nil {
 				return fmt.Errorf("failed to write operation: %w", err)
 			}
 			name := marshalMetricName(row.Metric, row.Labels)
@@ -116,6 +122,39 @@ func (w *diskWAL) append(op walOperation, rows []Row) error {
 		return w.flush()
 	}
 
+	return nil
+}
+
+func (w *diskWAL) appendBlobRow(row Row) error {
+	if err := w.w.WriteByte(byte(operationInsertBlob)); err != nil {
+		return fmt.Errorf("failed to write blob operation: %w", err)
+	}
+	name := marshalMetricName(row.Metric, row.Labels)
+	lBuf := make([]byte, binary.MaxVarintLen64)
+	n := binary.PutUvarint(lBuf, uint64(len(name)))
+	if _, err := w.w.Write(lBuf[:n]); err != nil {
+		return fmt.Errorf("failed to write the length of the metric name: %w", err)
+	}
+	if _, err := w.w.WriteString(name); err != nil {
+		return fmt.Errorf("failed to write the metric name: %w", err)
+	}
+	tsBuf := make([]byte, binary.MaxVarintLen64)
+	n = binary.PutVarint(tsBuf, row.DataPoint.Timestamp)
+	if _, err := w.w.Write(tsBuf[:n]); err != nil {
+		return fmt.Errorf("failed to write the timestamp: %w", err)
+	}
+	payload := row.DataPoint.Payload
+	if payload == nil {
+		payload = []byte{}
+	}
+	pBuf := make([]byte, binary.MaxVarintLen64)
+	n = binary.PutUvarint(pBuf, uint64(len(payload)))
+	if _, err := w.w.Write(pBuf[:n]); err != nil {
+		return fmt.Errorf("failed to write the payload length: %w", err)
+	}
+	if _, err := w.w.Write(payload); err != nil {
+		return fmt.Errorf("failed to write the payload: %w", err)
+	}
 	return nil
 }
 
@@ -243,7 +282,7 @@ func (f *diskWALReader) readAll() error {
 		for segment.next() {
 			rec := segment.record()
 			switch rec.op {
-			case operationInsert:
+			case operationInsert, operationInsertBlob:
 				f.rowsToInsert = append(f.rowsToInsert, rec.row)
 			}
 		}
@@ -314,6 +353,42 @@ func (f *segment) next() bool {
 				DataPoint: DataPoint{
 					Timestamp: ts,
 					Value:     math.Float64frombits(val),
+				},
+			},
+		}
+	case operationInsertBlob:
+		metricLen, err := binary.ReadUvarint(f.r)
+		if err != nil {
+			f.err = fmt.Errorf("failed to read the length of metric name: %w", err)
+			return false
+		}
+		metric := make([]byte, int(metricLen))
+		if _, err := io.ReadFull(f.r, metric); err != nil {
+			f.err = fmt.Errorf("failed to read the metric name: %w", err)
+			return false
+		}
+		ts, err := binary.ReadVarint(f.r)
+		if err != nil {
+			f.err = fmt.Errorf("failed to read timestamp: %w", err)
+			return false
+		}
+		payloadLen, err := binary.ReadUvarint(f.r)
+		if err != nil {
+			f.err = fmt.Errorf("failed to read payload length: %w", err)
+			return false
+		}
+		payload := make([]byte, payloadLen)
+		if _, err := io.ReadFull(f.r, payload); err != nil {
+			f.err = fmt.Errorf("failed to read payload: %w", err)
+			return false
+		}
+		f.current = walRecord{
+			op: operationInsert,
+			row: Row{
+				Metric: string(metric),
+				DataPoint: DataPoint{
+					Timestamp: ts,
+					Payload:   payload,
 				},
 			},
 		}

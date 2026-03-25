@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+type seriesKind int8
+
+const (
+	seriesKindUnknown seriesKind = iota
+	seriesKindNumeric
+	seriesKindBlob
+)
+
 // A memoryPartition implements a partition to store data points on heap.
 // It offers a goroutine safe capabilities.
 type memoryPartition struct {
@@ -92,7 +100,9 @@ func (m *memoryPartition) insertRows(rows []Row) ([]Row, error) {
 		}
 		name := marshalMetricName(row.Metric, row.Labels)
 		mt := m.getMetric(name)
-		mt.insertPoint(&row.DataPoint)
+		if err := mt.insertPoint(&row.DataPoint); err != nil {
+			return nil, err
+		}
 		rowsNum++
 	}
 	atomic.AddInt64(&m.numPoints, rowsNum)
@@ -170,6 +180,7 @@ func (m *memoryPartition) expired() bool {
 // memoryMetric has a list of ordered data points that belong to the memoryMetric
 type memoryMetric struct {
 	name         string
+	kind         seriesKind
 	size         int64
 	minTimestamp int64
 	maxTimestamp int64
@@ -179,18 +190,21 @@ type memoryMetric struct {
 	mu               sync.RWMutex
 }
 
-func (m *memoryMetric) insertPoint(point *DataPoint) {
+func (m *memoryMetric) insertPoint(point *DataPoint) error {
+	pointKind := seriesKindNumeric
+	if point.IsBlob() {
+		pointKind = seriesKindBlob
+	}
+
 	size := atomic.LoadInt64(&m.size)
-	// TODO: Consider to stop using mutex every time.
-	//   Instead, fix the capacity of points slice, kind of like:
-	/*
-		m.points := make([]*DataPoint, 1000)
-		for i := 0; i < 1000; i++ {
-			m.points[i] = point
-		}
-	*/
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	if m.kind == seriesKindUnknown {
+		m.kind = pointKind
+	} else if m.kind != pointKind {
+		return ErrMixedSeriesKind
+	}
 
 	// First insertion
 	if size == 0 {
@@ -198,17 +212,18 @@ func (m *memoryMetric) insertPoint(point *DataPoint) {
 		atomic.StoreInt64(&m.minTimestamp, point.Timestamp)
 		atomic.StoreInt64(&m.maxTimestamp, point.Timestamp)
 		atomic.AddInt64(&m.size, 1)
-		return
+		return nil
 	}
 	// Insert point in order
 	if m.points[size-1].Timestamp < point.Timestamp {
 		m.points = append(m.points, point)
 		atomic.StoreInt64(&m.maxTimestamp, point.Timestamp)
 		atomic.AddInt64(&m.size, 1)
-		return
+		return nil
 	}
 
 	m.outOfOrderPoints = append(m.outOfOrderPoints, point)
+	return nil
 }
 
 // selectPoints returns a new slice by re-slicing with [startIdx:endIdx].

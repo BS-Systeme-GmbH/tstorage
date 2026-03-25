@@ -53,6 +53,10 @@ type diskMetric struct {
 	MinTimestamp  int64  `json:"minTimestamp"`
 	MaxTimestamp  int64  `json:"maxTimestamp"`
 	NumDataPoints int64  `json:"numDataPoints"`
+	// Codec identifies the encoding used for this metric's data.
+	// Empty string or "numeric" means Gorilla float encoding (backward-compatible default).
+	// "blob" means length-prefixed binary payload encoding.
+	Codec string `json:"codec,omitempty"`
 }
 
 // openDiskPartition first maps the data file into memory with memory-mapping.
@@ -122,9 +126,20 @@ func (d *diskPartition) selectDataPoints(metric string, labels []Label, start, e
 	if _, err := r.Seek(mt.Offset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("failed to seek: %w", err)
 	}
-	decoder, err := newSeriesDecoder(r)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate decoder for metric %q in %q: %w", name, d.dirPath, err)
+	var decoder seriesDecoder
+	switch mt.Codec {
+	case "blob":
+		dec, err := newBlobSeriesDecoder(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate blob decoder for metric %q in %q: %w", name, d.dirPath, err)
+		}
+		decoder = dec
+	default:
+		dec, err := newSeriesDecoder(r)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate decoder for metric %q in %q: %w", name, d.dirPath, err)
+		}
+		decoder = dec
 	}
 
 	// TODO: Divide fixed-lengh chunks when flushing, and index it.

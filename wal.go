@@ -8,13 +8,21 @@ import (
 type walOperation byte
 
 const (
-	// The record format for operateInsert is as shown below:
+	// The record format for operationInsert is as shown below:
 	/*
 	   +--------+---------------------+--------+--------------------+----------------+
 	   | op(1b) | len metric(varints) | metric | timestamp(varints) | value(varints) |
 	   +--------+---------------------+--------+--------------------+----------------+
 	*/
 	operationInsert walOperation = iota
+
+	// The record format for operationInsertBlob is as shown below:
+	/*
+	   +--------+---------------------+--------+--------------------+------------------------+---------+
+	   | op(1b) | len metric(varints) | metric | timestamp(varints) | payload len(uvarints)  | payload |
+	   +--------+---------------------+--------+--------------------+------------------------+---------+
+	*/
+	operationInsertBlob
 )
 
 // wal represents a write-ahead log, which offers durability guarantees.
