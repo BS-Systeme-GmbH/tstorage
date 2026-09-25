@@ -1,4 +1,4 @@
-module github.com/nakabonne/tstorage
+module github.com/BS-Systeme-GmbH/tstorage
 
 go 1.20
 

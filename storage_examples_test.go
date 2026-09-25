@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nakabonne/tstorage"
+	"github.com/BS-Systeme-GmbH/tstorage"
 )
 
 func ExampleNewStorage_withDataPath() {

@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nakabonne/tstorage/internal/cgroup"
-	"github.com/nakabonne/tstorage/internal/timerpool"
+	"github.com/BS-Systeme-GmbH/tstorage/internal/cgroup"
+	"github.com/BS-Systeme-GmbH/tstorage/internal/timerpool"
 )
 
 var (
