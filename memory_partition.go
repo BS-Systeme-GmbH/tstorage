@@ -177,13 +177,15 @@ func (m *memoryPartition) expired() bool {
 	return false
 }
 
-// memoryMetric has a list of ordered data points that belong to the memoryMetric
+// memoryMetric has a list of ordered data points that belong to the memoryMetric.
+// int64 fields are accessed via atomic.LoadInt64, so ordering of struct fields is
+// important for 32-Bit Systems to ensure alignment.
 type memoryMetric struct {
-	name         string
-	kind         seriesKind
 	size         int64
 	minTimestamp int64
 	maxTimestamp int64
+	name         string
+	kind         seriesKind
 	// points must kept in order
 	points           []*DataPoint
 	outOfOrderPoints []*DataPoint
